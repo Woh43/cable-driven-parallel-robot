@@ -1,0 +1,4 @@
+gazebo:
+  ros__parameters:
+    # Keep ROS time advancing faster than the 50 Hz trajectory command loop.
+    publish_rate: 100.0

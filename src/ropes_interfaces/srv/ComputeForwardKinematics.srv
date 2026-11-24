@@ -1,0 +1,7 @@
+# All three named drum positions in unwrapped radians. Zero is the calibrated home.
+sensor_msgs/JointState drum_state
+---
+bool success
+string message
+# Absolute point in base_link, in meters.
+geometry_msgs/PointStamped position

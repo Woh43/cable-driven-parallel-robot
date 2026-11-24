@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package format="3">
+  <name>ropes_motion</name>
+  <version>0.5.0</version>
+  <description>Cartesian waypoint planning and trajectory execution for the three-cable robot.</description>
+  <maintainer email="maintainer@example.com">Project owner</maintainer>
+  <license>Proprietary</license>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ropes_description</exec_depend>
+  <exec_depend>ropes_interfaces</exec_depend>
+  <exec_depend>ropes_kinematics</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

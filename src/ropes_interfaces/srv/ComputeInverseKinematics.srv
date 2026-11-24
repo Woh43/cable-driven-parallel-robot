@@ -1,0 +1,7 @@
+# Absolute point in base_link, in meters.
+geometry_msgs/PointStamped target
+---
+bool success
+string message
+# All three named drum positions in unwrapped radians.
+sensor_msgs/JointState drum_state

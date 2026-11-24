@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="cable_robot">
+  <material name="aluminum_frame">
+    <color rgba="0.72 0.74 0.77 1" />
+  </material>
+  <material name="mounts">
+    <color rgba="0.56 0.59 0.64 1" />
+  </material>
+  <material name="pulleys">
+    <color rgba="0.72 0.75 0.78 1" />
+  </material>
+  <material name="motors">
+    <color rgba="0.25 0.28 0.31 1" />
+  </material>
+  <material name="spool">
+    <color rgba="0.68 0.7 0.75 1" />
+  </material>
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/aluminum_frame.stl" />
+      </geometry>
+      <material name="aluminum_frame" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/aluminum_frame.stl" />
+      </geometry>
+    </collision>
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/mounts.stl" />
+      </geometry>
+      <material name="mounts" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/mounts.stl" />
+      </geometry>
+    </collision>
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/pulleys.stl" />
+      </geometry>
+      <material name="pulleys" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/pulleys.stl" />
+      </geometry>
+    </collision>
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/motors.stl" />
+      </geometry>
+      <material name="motors" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/motors.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="drum_1">
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_1.stl" />
+      </geometry>
+      <material name="spool" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_1.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="drum_1_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="drum_1" />
+    <origin xyz="0.2123278949 -0.2239935565 0.03600000358" rpy="0 0 0" />
+    <axis xyz="-0.8660254038 -0.5 0" />
+  </joint>
+  <link name="drum_2">
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_2.stl" />
+      </geometry>
+      <material name="spool" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_2.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="drum_2_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="drum_2" />
+    <origin xyz="-0.006 0.1735 0.03600000358" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <link name="drum_3">
+    <visual>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_3.stl" />
+      </geometry>
+      <material name="spool" />
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://ropes_description/meshes/drum_3.stl" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="drum_3_joint" type="continuous">
+    <parent link="base_link" />
+    <child link="drum_3" />
+    <origin xyz="-0.2123278949 -0.2239935565 0.03600000358" rpy="0 0 0" />
+    <axis xyz="0.8660254038 -0.5 0" />
+  </joint>
+  <material name="end_effector_color">
+    <color rgba="0.9 0.16 0.18 1" />
+  </material>
+  <link name="end_effector">
+    <visual>
+      <geometry>
+        <sphere radius=".012" />
+      </geometry>
+      <material name="end_effector_color" />
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius=".012" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="cable_exit_1" />
+  <joint name="cable_exit_1_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_exit_1" />
+    <origin xyz="0.170543694 -0.163621197 0.373868574" rpy="0 0 0" />
+  </joint>
+  <link name="cable_exit_2" />
+  <joint name="cable_exit_2_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_exit_2" />
+    <origin xyz="0 0.127366646 0.372765953" rpy="0 0 0" />
+  </joint>
+  <link name="cable_exit_3" />
+  <joint name="cable_exit_3_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_exit_3" />
+    <origin xyz="-0.170543694 -0.163621197 0.373868574" rpy="0 0 0" />
+  </joint>
+  <!--Virtual Cartesian joints are solved together from the drum angles.-->
+  <link name="end_effector_x" />
+  <link name="end_effector_y" />
+  <joint name="end_effector_x_joint" type="prismatic">
+    <parent link="base_link" />
+    <child link="end_effector_x" />
+    <origin xyz="0 0 0.17" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.170544" upper="0.170544" effort="0" velocity="0" />
+  </joint>
+  <joint name="end_effector_y_joint" type="prismatic">
+    <parent link="end_effector_x" />
+    <child link="end_effector_y" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.163621" upper="0.127367" effort="0" velocity="0" />
+  </joint>
+  <joint name="end_effector_z_joint" type="prismatic">
+    <parent link="end_effector_y" />
+    <child link="end_effector" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 0 1" />
+    <limit lower="-0.08" upper="0.07" effort="0" velocity="0" />
+  </joint>
+  <!--Neutral cable geometry for direct URDF viewing. ROS 2 launch uses live cable markers.-->
+  <material name="cable_1_color">
+    <color rgba="0.96 0.4 0.1 1" />
+  </material>
+  <link name="cable_preview_1">
+    <visual>
+      <origin xyz="0.2022308355 -0.218504936 0.2052559155" rpy="0 0.1778706824 2.0943951" />
+      <geometry>
+        <cylinder radius="0.001" length="0.3366395655" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1872528225 -0.192562257 0.3714964765" rpy="0 0.2939475533 2.094396933" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492577" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.187014363 -0.1921492335 0.3725936965" rpy="0 0.5261022499 2.094394823" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493508" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1866560795 -0.1915286685 0.3735517545" rpy="0 0.7582565076 2.094395579" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492552" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1861971955 -0.190733858 0.374319247" rpy="0 0.990410364 2.094394614" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493348" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.185662332 -0.1898074465 0.374854995" rpy="0 1.222565089 2.094394881" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492806" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.185080186 -0.18879914 0.3751302535" rpy="0 1.454718658 2.09439527" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493232" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.178531089 -0.1774557715 0.375200004" rpy="0 1.570796327 2.094395104" />
+      <geometry>
+        <cylinder radius="0.001" length="0.02499999992" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1719671005 -0.16608661 0.375123027" rpy="0 1.692767193 2.09439513" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001265354548" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1713577155 -0.1650311245 0.3748196765" rpy="0 1.936709583 2.094395311" />
+      <geometry>
+        <cylinder radius="0.001" length="0.00126535541" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.1708030065 -0.16407034 0.3742309385" rpy="0 2.180650395 2.094394548" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001265354398" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+    <visual>
+      <origin xyz="0.085271847 -0.0818105985 0.271934287" rpy="0 2.28256211 2.376907339" />
+      <geometry>
+        <cylinder radius="0.001" length="0.312120879" />
+      </geometry>
+      <material name="cable_1_color" />
+    </visual>
+  </link>
+  <joint name="cable_preview_1_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_preview_1" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <material name="cable_2_color">
+    <color rgba="0.06 0.65 0.85 1" />
+  </material>
+  <link name="cable_preview_2">
+    <visual>
+      <origin xyz="0 0.165202988 0.2051466715" rpy="0 0.1691718923 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.3362579107" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.136717058 0.371474922" rpy="0 0.2897501312 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250976589" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.136221654 0.3726137255" rpy="0 0.5309064155 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250975689" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.1354686105 0.3736012595" rpy="0 0.7720625304 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250976059" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.13450151 0.374380371" rpy="0 1.013218391 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250975807" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.1333763235 0.3749059685" rpy="0 1.254375009 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250975594" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.1321581705 0.375147633" rpy="0 1.495531235 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250976615" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.130917552 0.3750913785" rpy="0 1.736687245 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250975861" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.1297262695 0.3747404605" rpy="0 1.97784385 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001250975575" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.128653268 0.3741151885" rpy="0 2.218999703 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.00125097563" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.127760647 0.37325175" rpy="0 2.460155913 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.00125097644" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+    <visual>
+      <origin xyz="0 0.063683323 0.2713829765" rpy="0 2.58073416 -1.570796327" />
+      <geometry>
+        <cylinder radius="0.001" length="0.2394499827" />
+      </geometry>
+      <material name="cable_2_color" />
+    </visual>
+  </link>
+  <joint name="cable_preview_2_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_preview_2" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+  <material name="cable_3_color">
+    <color rgba="0.62 0.35 0.87 1" />
+  </material>
+  <link name="cable_preview_3">
+    <visual>
+      <origin xyz="-0.2022308355 -0.218504936 0.2052559155" rpy="0 0.1778706824 1.047197553" />
+      <geometry>
+        <cylinder radius="0.001" length="0.3366395655" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1872528225 -0.192562257 0.3714964765" rpy="0 0.2939475533 1.047195721" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492577" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.187014363 -0.1921492335 0.3725936965" rpy="0 0.5261022499 1.047197831" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493508" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1866560795 -0.1915286685 0.3735517545" rpy="0 0.7582565076 1.047197075" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492552" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1861971955 -0.190733858 0.374319247" rpy="0 0.990410364 1.04719804" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493348" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.185662332 -0.1898074465 0.374854995" rpy="0 1.222565089 1.047197773" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204492806" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.185080186 -0.18879914 0.3751302535" rpy="0 1.454718658 1.047197384" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001204493232" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.178531089 -0.1774557715 0.375200004" rpy="0 1.570796327 1.047197549" />
+      <geometry>
+        <cylinder radius="0.001" length="0.02499999992" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1719671005 -0.16608661 0.375123027" rpy="0 1.692767193 1.047197523" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001265354548" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1713577155 -0.1650311245 0.3748196765" rpy="0 1.936709583 1.047197343" />
+      <geometry>
+        <cylinder radius="0.001" length="0.00126535541" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.1708030065 -0.16407034 0.3742309385" rpy="0 2.180650395 1.047198106" />
+      <geometry>
+        <cylinder radius="0.001" length="0.001265354398" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+    <visual>
+      <origin xyz="-0.085271847 -0.0818105985 0.271934287" rpy="0 2.28256211 0.7646853142" />
+      <geometry>
+        <cylinder radius="0.001" length="0.312120879" />
+      </geometry>
+      <material name="cable_3_color" />
+    </visual>
+  </link>
+  <joint name="cable_preview_3_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="cable_preview_3" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+</robot>

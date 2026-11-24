@@ -1,0 +1,11 @@
+# Waypoints are absolute positions in header.frame_id (base_link), in meters.
+std_msgs/Header header
+geometry_msgs/Point[] waypoints
+---
+bool success
+string message
+---
+# Zero-based segment index, normalized progress and measured end effector position.
+uint32 segment_index
+float64 progress
+geometry_msgs/PointStamped position

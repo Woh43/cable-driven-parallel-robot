@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ropes_simulation</name>
+  <version>0.5.0</version>
+  <description>Ideal kinematic simulation and Gazebo cable force simulation for the three-rope robot.</description>
+  <maintainer email="maintainer@example.com">Project owner</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <depend>gazebo_dev</depend>
+  <depend>gazebo_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>ropes_interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ropes_description</exec_depend>
+  <exec_depend>ropes_kinematics</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

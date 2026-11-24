@@ -1,0 +1,8 @@
+# Gazebo Classic point-mass model. SI units.
+mass_kg: 0.12
+stiffness_n_m: 1200.0
+damping_ns_m: 10.0
+max_drum_speed_rad_s: 6.0
+state_rate_hz: 50.0
+physics_step_s: 0.001
+gravity_m_s2: 9.81
