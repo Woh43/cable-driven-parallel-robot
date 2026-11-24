@@ -13,12 +13,14 @@
 
 ```text
 ropes_ws/
+├── firmware/ropes_ble_gateway/   # ESP32-S3 的 BLE 到三路 UART 固件
 └── src/
     ├── ropes_description/   # CAD 网格、URDF、标定配置、RViz 配置
     ├── ropes_interfaces/    # ROS 消息、服务、Action 定义
     ├── ropes_kinematics/    # 可独立调用的几何模型、ROS 正逆解服务
     ├── ropes_motion/        # 笛卡尔规划、限速、Action 执行
     ├── ropes_simulation/    # 理想运动学后端和 Gazebo 绳力插件
+    ├── ropes_hardware/      # USB 与 Bluetooth、驱动反馈、实机标定和门控
     └── ropes_bringup/       # 系统启动、手动控制、绳路可视化
 ```
 
@@ -65,6 +67,8 @@ ros2 launch ropes_bringup simulation.launch.py backend:=kinematic
 ```bash
 ros2 launch ropes_bringup simulation.launch.py backend:=gazebo
 ```
+
+真机提供 USB 三串口和 ESP32 三路 UART 的 BLE 两个后端。两者使用 `hardware.launch.py`，通过实机 YAML 中的 `transport` 选择，默认真机命名空间为 `/ropes_real`。上机步骤见 [实机接入](docs/hardware.md)，ESP32 烧录、配对和通道配置见 [Bluetooth 网关](docs/bluetooth.md)。
 
 在另一终端加载 `install/setup.bash` 后发送绝对坐标的路径。系统从当前观测位置出发，依次通过航点，各航点处的规划速度为零。以下路径最后返回零位。
 

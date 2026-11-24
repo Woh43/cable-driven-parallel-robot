@@ -1,12 +1,15 @@
 """Follow Cartesian waypoints from measured state and command drum positions."""
 
+from collections import deque
 from dataclasses import dataclass, replace
 import math
 from pathlib import Path
+import time
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from nav_msgs.msg import Path as PathMessage
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.action.server import ServerGoalHandle
@@ -16,20 +19,36 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.task import Future
 from sensor_msgs.msg import JointState
+from std_srvs.srv import Trigger
 
 from ropes_interfaces.action import FollowCartesianPath
+from ropes_interfaces.msg import HardwareStatus
+from ropes_kinematics.joints import joint_positions
 from ropes_kinematics.model import CableModel
 
-from .planner import CartesianPlan, CartesianPlanner, TrajectoryLimits, Vector
+from .hardware_readiness import HardwareHeartbeat, HardwareReadiness
+from .planner import (
+    ActuatorAngleLimits, CartesianPlan, CartesianPlanner, ScheduledWaypoint, TrajectoryLimits,
+    Vector,
+)
 
 
 _BASE_FRAME = "base_link"
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 _SOURCE_CLOCK_TOLERANCE_NS = 50_000_000
+_FEEDBACK_BUFFER_SIZE = 8
 
 
 def _xyz(point):
     return point.x, point.y, point.z
+
+
+def _stamp_ns(stamp):
+    return stamp.sec * _NANOSECONDS_PER_SECOND + stamp.nanosec
+
+
+def _drum_error(measured, target):
+    return max(abs(actual - desired) for actual, desired in zip(measured, target))
 
 
 @dataclass(frozen=True)
@@ -39,6 +58,19 @@ class _MeasuredPose:
     source_ns: int
 
 
+@dataclass(frozen=True)
+class _MeasuredDrums:
+    angles: Vector
+    received_ns: int
+    source_ns: int
+
+
+@dataclass(frozen=True)
+class _Feedback:
+    pose: _MeasuredPose
+    drums: _MeasuredDrums | None = None
+
+
 @dataclass
 class _Execution:
     handle: ServerGoalHandle
@@ -46,9 +78,11 @@ class _Execution:
     plan: CartesianPlan | None = None
     started_ns: int = 0
     last_tick_ns: int | None = None
-    final_command_ns: int | None = None
+    waypoint_command_ns: int | None = None
     settled_since_ns: int | None = None
     last_angles: Vector | None = None
+    hardware_waypoints: tuple[ScheduledWaypoint, ...] = ()
+    waypoint_cursor: int = 0
 
 
 class TrajectoryServer(Node):
@@ -70,7 +104,17 @@ class TrajectoryServer(Node):
             raise ValueError("actuator_max_drum_speed_rad_s must be finite and nonnegative")
         if 0.0 < actuator_cap < limits.max_drum_speed_rad_s:
             limits = replace(limits, max_drum_speed_rad_s=actuator_cap)
-        self.planner = CartesianPlanner(self.model, limits)
+        angle_defaults = ActuatorAngleLimits()
+        read_only = ParameterDescriptor(read_only=True)
+        actuator_limits = ActuatorAngleLimits(
+            lower_rad=self.declare_parameter(
+                "actuator_lower_limits_rad", list(angle_defaults.lower_rad), descriptor=read_only
+            ).value,
+            upper_rad=self.declare_parameter(
+                "actuator_upper_limits_rad", list(angle_defaults.upper_rad), descriptor=read_only
+            ).value,
+        )
+        self.planner = CartesianPlanner(self.model, limits, actuator_limits)
         self.command_period_s = 1.0 / self._positive_parameter("command_rate_hz", 50.0)
         self.pose_timeout_s = self._positive_parameter("pose_timeout_s", 0.50)
         self.goal_tolerance_m = self._positive_parameter("goal_tolerance_m", 0.005)
@@ -81,12 +125,31 @@ class TrajectoryServer(Node):
         self.max_waypoints = self.declare_parameter("max_waypoints", 100).value
         if not 1 <= self.max_waypoints <= 2 ** 32:
             raise ValueError("max_waypoints must be between 1 and 2**32")
+        self.require_hardware_ready = self.declare_parameter(
+            "require_hardware_ready", False, descriptor=read_only,
+        ).value
+        self.actuator_goal_tolerance_rad = self._positive_parameter(
+            "actuator_goal_tolerance_rad", 0.02, descriptor=read_only
+        )
 
         self._pose: _MeasuredPose | None = None
         self._execution: _Execution | None = None
         self._commands = self.create_publisher(JointState, "drum_command", 1)
         path_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._paths = self.create_publisher(PathMessage, "planned_path", path_qos)
+        if self.require_hardware_ready:
+            self._pose_samples = deque(maxlen=_FEEDBACK_BUFFER_SIZE)
+            self._drum_samples = deque(maxlen=_FEEDBACK_BUFFER_SIZE)
+            self._hardware = HardwareReadiness(
+                self.pose_timeout_s * _NANOSECONDS_PER_SECOND, _SOURCE_CLOCK_TOLERANCE_NS
+            )
+            self._hardware_subscription = self.create_subscription(
+                HardwareStatus, "hardware/status", self._receive_hardware_status, path_qos
+            )
+            self._hardware_stop = self.create_client(Trigger, "hardware/stop")
+            self._drum_subscription = self.create_subscription(
+                JointState, "joint_states", self._receive_drums, qos_profile_sensor_data
+            )
         self._pose_subscription = self.create_subscription(
             PointStamped, "end_effector_pose", self._receive_pose, qos_profile_sensor_data
         )
@@ -100,8 +163,8 @@ class TrajectoryServer(Node):
             self.command_period_s, self._advance, clock=Clock(clock_type=ClockType.STEADY_TIME)
         )
 
-    def _positive_parameter(self, name, default):
-        value = self.declare_parameter(name, default).value
+    def _positive_parameter(self, name, default, *, descriptor=None):
+        value = self.declare_parameter(name, default, descriptor=descriptor).value
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be finite and positive")
         return value
@@ -111,21 +174,74 @@ class TrajectoryServer(Node):
             return
         if not all(map(math.isfinite, _xyz(message.point))):
             return
-        stamp = message.header.stamp
-        source_ns = stamp.sec * _NANOSECONDS_PER_SECOND + stamp.nanosec
+        source_ns = _stamp_ns(message.header.stamp)
         self._pose = _MeasuredPose(message, self.get_clock().now().nanoseconds, source_ns)
+        if self.require_hardware_ready:
+            self._pose_samples.append(self._pose)
 
-    def _fresh_pose(self, now_ns):
-        pose = self._pose
-        if pose is None:
-            return None
+    def _receive_drums(self, message):
+        if message.header.frame_id != _BASE_FRAME:
+            return
+        source_ns = _stamp_ns(message.header.stamp)
+        if source_ns <= 0:
+            return
+        try:
+            positions = joint_positions(message, self.model.joint_names)
+        except ValueError:
+            return
+        self._drum_samples.append(
+            _MeasuredDrums(positions, self.get_clock().now().nanoseconds, source_ns)
+        )
+
+    def _fresh_sample(self, sample, now_ns):
         max_age_ns = self.pose_timeout_s * _NANOSECONDS_PER_SECOND
-        if (0 <= now_ns - pose.received_ns <= max_age_ns and
-                -_SOURCE_CLOCK_TOLERANCE_NS <= now_ns - pose.source_ns <= max_age_ns):
-            return pose
+        return (
+            0 <= now_ns - sample.received_ns <= max_age_ns
+            and -_SOURCE_CLOCK_TOLERANCE_NS <= now_ns - sample.source_ns <= max_age_ns
+        )
+
+    def _fresh_feedback(self, now_ns):
+        if not self.require_hardware_ready:
+            if self._pose is not None and self._fresh_sample(self._pose, now_ns):
+                return _Feedback(self._pose)
+            return None
+
+        drums_by_stamp = {
+            drums.source_ns: drums
+            for drums in self._drum_samples
+            if self._fresh_sample(drums, now_ns)
+        }
+        pose = max(
+            (pose for pose in self._pose_samples
+             if pose.source_ns in drums_by_stamp and self._fresh_sample(pose, now_ns)),
+            key=lambda sample: sample.source_ns,
+            default=None,
+        )
+        return _Feedback(pose, drums_by_stamp[pose.source_ns]) if pose is not None else None
+
+    def _receive_hardware_status(self, message):
+        now_ns = self.get_clock().now().nanoseconds
+        steady_ns = time.monotonic_ns()
+        heartbeat = HardwareHeartbeat(
+            _stamp_ns(message.header.stamp),
+            steady_ns, message.state, message.detail, message.referenced, message.armed,
+        )
+        self._hardware.receive(heartbeat, now_ns)
+        execution = self._execution
+        if (execution is not None and execution.plan is not None
+                and not execution.handle.is_cancel_requested):
+            problem = self._hardware.problem(now_ns, steady_ns)
+            if problem is not None:
+                self._finish(execution, "abort", problem)
+
+    def _hardware_problem(self, now_ns):
+        if self.require_hardware_ready:
+            return self._hardware.problem(now_ns, time.monotonic_ns())
         return None
 
     def _check_goal(self, request):
+        now_ns = self.get_clock().now().nanoseconds
+        hardware_problem = self._hardware_problem(now_ns)
         if self._execution is not None:
             reason = "Another Cartesian path is executing"
         elif request.header.frame_id != _BASE_FRAME:
@@ -134,8 +250,14 @@ class TrajectoryServer(Node):
             reason = f"Expected 1 to {self.max_waypoints} waypoints"
         elif any(not all(map(math.isfinite, _xyz(point))) for point in request.waypoints):
             reason = "Waypoint coordinates must be finite"
-        elif self._fresh_pose(self.get_clock().now().nanoseconds) is None:
-            reason = f"No fresh {_BASE_FRAME} pose is available on end_effector_pose"
+        elif hardware_problem is not None:
+            reason = hardware_problem
+        elif self._fresh_feedback(now_ns) is None:
+            reason = (
+                "No fresh time-matched end_effector_pose and joint_states feedback"
+                if self.require_hardware_ready
+                else f"No fresh {_BASE_FRAME} pose is available on end_effector_pose"
+            )
         else:
             return GoalResponse.ACCEPT
         self.get_logger().warning(reason)
@@ -156,14 +278,28 @@ class TrajectoryServer(Node):
         if handle.is_cancel_requested:
             self._finish(execution, "canceled", "Canceled before execution")
             return await execution.completed
-        pose = self._fresh_pose(self.get_clock().now().nanoseconds)
-        if pose is None:
-            self._finish(execution, "abort", "Measured pose became stale before planning")
+        now_ns = self.get_clock().now().nanoseconds
+        hardware_problem = self._hardware_problem(now_ns)
+        if hardware_problem is not None:
+            self._finish(execution, "abort", hardware_problem)
+            return await execution.completed
+        feedback = self._fresh_feedback(now_ns)
+        if feedback is None:
+            self._finish(execution, "abort", "Measured feedback became stale before planning")
             return await execution.completed
 
         try:
+            start = _xyz(feedback.pose.message.point)
+            if feedback.drums is not None:
+                measured = feedback.drums.angles
+                ranges = ((angle, angle) for angle in measured)
+                self.planner.actuator_limits.validate(self.model.joint_names, ranges)
+                if _drum_error(measured, self.model.inverse(start)) > (
+                    self.actuator_goal_tolerance_rad
+                ):
+                    raise ValueError("Measured end effector pose disagrees with drum positions")
             execution.plan = self.planner.plan(
-                _xyz(pose.message.point), (_xyz(point) for point in handle.request.waypoints)
+                start, (_xyz(point) for point in handle.request.waypoints)
             )
         except ValueError as error:
             self._finish(execution, "abort", str(error))
@@ -171,6 +307,8 @@ class TrajectoryServer(Node):
 
         now = self.get_clock().now()
         execution.started_ns = now.nanoseconds
+        if self.require_hardware_ready:
+            execution.hardware_waypoints = execution.plan.waypoint_schedule()
         self._publish_path(execution.plan, now.to_msg())
         return await execution.completed
 
@@ -181,9 +319,17 @@ class TrajectoryServer(Node):
         now = self.get_clock().now()
         now_ns = now.nanoseconds
         if execution.handle.is_cancel_requested:
-            if execution.last_angles is not None:
+            message = "Canceled before sending a drum command"
+            if self.require_hardware_ready:
+                message = "Trajectory canceled"
+            elif execution.last_angles is not None:
                 self._command(execution.last_angles, now.to_msg())
-            self._finish(execution, "canceled", "Canceled; holding the last commanded drum angles")
+                message = "Canceled. Holding the last commanded drum angles"
+            self._finish(execution, "canceled", message)
+            return
+        hardware_problem = self._hardware_problem(now_ns)
+        if hardware_problem is not None:
+            self._finish(execution, "abort", hardware_problem)
             return
         if now_ns < execution.started_ns or (
             execution.last_tick_ns is not None and now_ns < execution.last_tick_ns
@@ -202,16 +348,35 @@ class TrajectoryServer(Node):
             )
             return
         execution.last_tick_ns = now_ns
-        pose = self._fresh_pose(now_ns)
-        if pose is None:
-            self._finish(execution, "abort", "Measured end effector pose became stale")
+        feedback = self._fresh_feedback(now_ns)
+        if feedback is None:
+            message = (
+                "Time-matched pose and drum feedback became stale"
+                if self.require_hardware_ready else "Measured end effector pose became stale"
+            )
+            self._finish(execution, "abort", message)
             return
 
         elapsed_s = (now_ns - execution.started_ns) / _NANOSECONDS_PER_SECOND
         plan = execution.plan
-        sample = plan.sample(elapsed_s)
+        waypoint = (
+            execution.hardware_waypoints[execution.waypoint_cursor]
+            if execution.hardware_waypoints else None
+        )
+        if waypoint is not None and elapsed_s >= waypoint.elapsed_s:
+            elapsed_s = waypoint.elapsed_s
+            position = waypoint.position
+            segment_index = waypoint.segment_index
+            settling = waypoint
+        else:
+            sample = plan.sample(elapsed_s)
+            position = sample.position
+            segment_index = sample.segment_index
+            settling = None
+            if elapsed_s >= plan.duration_s:
+                settling = ScheduledWaypoint(plan.duration_s, position, segment_index)
         try:
-            angles = self.model.inverse(sample.position)
+            angles = self.model.inverse(position)
         except ValueError as error:
             self._finish(execution, "abort", f"Planned sample failed inverse kinematics: {error}")
             return
@@ -219,36 +384,56 @@ class TrajectoryServer(Node):
         self._command(angles, stamp)
         execution.last_angles = angles
 
-        at_end = elapsed_s >= plan.duration_s
-        progress = 1.0 if at_end else elapsed_s / plan.duration_s
+        progress = 1.0 if elapsed_s >= plan.duration_s else elapsed_s / plan.duration_s
         execution.handle.publish_feedback(FollowCartesianPath.Feedback(
-            segment_index=sample.segment_index, progress=progress, position=pose.message
+            segment_index=segment_index, progress=progress, position=feedback.pose.message
         ))
-        if at_end:
-            self._settle(execution, now_ns, pose)
+        if settling is not None:
+            self._settle(execution, now_ns, feedback, settling, angles)
 
-    def _settle(self, execution, now_ns, pose):
-        if execution.final_command_ns is None:
-            execution.final_command_ns = now_ns
+    def _settle(self, execution, now_ns, feedback, waypoint, angles):
+        if execution.waypoint_command_ns is None:
+            execution.waypoint_command_ns = now_ns
             return
 
-        target = execution.plan.points[-1]
-        error_m = math.dist(_xyz(pose.message.point), target)
-        if pose.received_ns > execution.final_command_ns and error_m <= self.goal_tolerance_m:
+        pose = feedback.pose
+        error_m = math.dist(_xyz(pose.message.point), waypoint.position)
+        observed_after_command = pose.received_ns > execution.waypoint_command_ns
+        within_tolerance = error_m <= self.goal_tolerance_m
+        error_rad = None
+        if feedback.drums is not None:
+            observed_after_command = pose.source_ns > execution.waypoint_command_ns
+            error_rad = _drum_error(feedback.drums.angles, angles)
+            within_tolerance &= error_rad <= self.actuator_goal_tolerance_rad
+        if observed_after_command and within_tolerance:
             if execution.settled_since_ns is None:
                 execution.settled_since_ns = pose.source_ns
             stable_s = (pose.source_ns - execution.settled_since_ns) / _NANOSECONDS_PER_SECOND
             if stable_s >= self.settle_dwell_s:
-                self._finish(execution, "succeed", "Cartesian path completed")
+                if waypoint.elapsed_s >= execution.plan.duration_s:
+                    self._finish(execution, "succeed", "Cartesian path completed")
+                else:
+                    # Resume the timed plan at this waypoint once the real drives have arrived.
+                    execution.started_ns = now_ns - round(
+                        waypoint.elapsed_s * _NANOSECONDS_PER_SECOND
+                    )
+                    execution.waypoint_cursor += 1
+                    execution.waypoint_command_ns = None
+                    execution.settled_since_ns = None
                 return
         else:
             execution.settled_since_ns = None
 
-        elapsed_s = (now_ns - execution.final_command_ns) / _NANOSECONDS_PER_SECOND
-        if elapsed_s >= self.settle_timeout_s:
-            self._finish(
-                execution, "abort", f"End effector did not settle (error {error_m:.4f} m)"
-            )
+        waiting_s = (now_ns - execution.waypoint_command_ns) / _NANOSECONDS_PER_SECOND
+        if waiting_s >= self.settle_timeout_s:
+            if error_rad is None:
+                message = f"End effector did not settle (error {error_m:.4f} m)"
+            else:
+                message = (
+                    f"Waypoint {waypoint.segment_index + 1} did not settle "
+                    f"(Cartesian error {error_m:.4f} m, drum error {error_rad:.4f} rad)"
+                )
+            self._finish(execution, "abort", message)
 
     def _command(self, angles, stamp):
         message = JointState()
@@ -268,7 +453,32 @@ class TrajectoryServer(Node):
             path.poses.append(pose)
         self._paths.publish(path)
 
+    def _request_hardware_stop(self):
+        self._hardware.wait_for_disarm(self.get_clock().now().nanoseconds)
+        if not self._hardware_stop.service_is_ready():
+            self.get_logger().error("Hardware stop service is unavailable")
+            return "Hardware stop service is unavailable"
+        try:
+            pending = self._hardware_stop.call_async(Trigger.Request())
+        except Exception as error:
+            self.get_logger().error(f"Could not send hardware stop request: {error}")
+            return "Could not send hardware stop request"
+        pending.add_done_callback(self._hardware_stop_result)
+        return "Hardware stop requested"
+
+    def _hardware_stop_result(self, pending):
+        try:
+            response = pending.result()
+        except Exception as error:
+            self.get_logger().error(f"Hardware stop request failed: {error}")
+            return
+        if not response.success:
+            self.get_logger().error(f"Hardware stop declined: {response.message}")
+
     def _finish(self, execution, outcome, message):
+        commands_sent = execution.last_angles is not None
+        if self.require_hardware_ready and outcome != "succeed" and commands_sent:
+            message = f"{message}. {self._request_hardware_stop()}"
         if outcome == "succeed":
             execution.handle.succeed()
         elif outcome == "canceled":

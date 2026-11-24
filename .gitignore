@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 *.egg-info/
+/hardware.local.yaml
+/hardware.bluetooth.local.yaml
+/firmware/ropes_ble_gateway/gateway_config.local.h

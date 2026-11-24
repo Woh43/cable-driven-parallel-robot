@@ -1,0 +1,42 @@
+# Emm V5 legacy free protocol, checksum fixed at 0x6B. Not an X-series profile.
+# Replace all three paths. Match the names to physical drums before enabling motion.
+transport: usb
+protocol: emm_v5_uart_0x6b
+allow_motion: false
+baudrate: 115200
+timeout_s: 0.05
+poll_rate_hz: 15.0
+command_rate_hz: 12.0
+command_timeout_s: 0.40
+max_drum_speed_rad_s: 0.30
+max_command_lead_rad: 0.06
+hold_tolerance_rad: 0.02
+acceleration: 200
+axes:
+  drum_1_joint:
+    port: /dev/serial/by-id/REPLACE_WITH_USB_CHANNEL_1
+    address: 1
+    expected_firmware: null
+    pulses_per_revolution: 3200
+    direction: 1
+    gear_ratio: 1.0
+    lower_rad: -1.0
+    upper_rad: 1.0
+  drum_2_joint:
+    port: /dev/serial/by-id/REPLACE_WITH_USB_CHANNEL_2
+    address: 1
+    expected_firmware: null
+    pulses_per_revolution: 3200
+    direction: 1
+    gear_ratio: 1.0
+    lower_rad: -1.0
+    upper_rad: 1.0
+  drum_3_joint:
+    port: /dev/serial/by-id/REPLACE_WITH_USB_CHANNEL_3
+    address: 1
+    expected_firmware: null
+    pulses_per_revolution: 3200
+    direction: 1
+    gear_ratio: 1.0
+    lower_rad: -1.0
+    upper_rad: 1.0

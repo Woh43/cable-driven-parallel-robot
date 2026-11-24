@@ -4,11 +4,12 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
+from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, PushRosNamespace, SetRemap
 from ropes_bringup.description import DEFAULT_GEOMETRY_PATH, DESCRIPTION_SHARE, robot_description
 from ropes_kinematics.model import CableModel
 
@@ -19,6 +20,8 @@ def create_nodes(context):
     slider_gui = IfCondition(LaunchConfiguration('slider_gui')).evaluate(context)
     if slider_gui and control == 'trajectory':
         raise RuntimeError('slider_gui requires control:=xyz or control:=drum')
+    if backend == 'hardware' and control != 'trajectory':
+        raise RuntimeError('The hardware backend requires control:=trajectory')
 
     config_path = LaunchConfiguration('config_path').perform(context)
     model = CableModel.from_file(config_path)
@@ -65,6 +68,23 @@ def create_nodes(context):
                 'use_sim_time': 'true',
             }.items(),
         ))
+    elif backend == 'hardware':
+        from ropes_hardware.settings import HardwareSettings
+
+        hardware_config_path = LaunchConfiguration('hardware_config_path').perform(context)
+        settings = HardwareSettings.from_file(hardware_config_path, model.joint_names)
+        backend_limits = {
+            'require_hardware_ready': True,
+            'actuator_max_drum_speed_rad_s': settings.max_drum_speed_rad_s,
+            'actuator_lower_limits_rad': [axis.lower_rad for axis in settings.axes],
+            'actuator_upper_limits_rad': [axis.upper_rad for axis in settings.axes],
+            'actuator_goal_tolerance_rad': settings.hold_tolerance_rad,
+            'command_rate_hz': settings.command_rate_hz,
+        }
+        nodes.append(Node(
+            package='ropes_hardware', executable='hardware_driver', output='screen',
+            parameters=[{**model_parameters, 'hardware_config_path': hardware_config_path}],
+        ))
     else:
         nodes.append(Node(
             package='ropes_simulation', executable='kinematic_simulator', output='screen',
@@ -92,16 +112,25 @@ def create_nodes(context):
                     ('robot_description', 'slider_controls_description'),
                 ],
             ))
+    if backend == 'hardware':
+        namespace = LaunchConfiguration('hardware_namespace').perform(context)
+        if not namespace.strip('/'):
+            raise RuntimeError('Hardware requires a non-root ROS namespace')
+        return [GroupAction(actions=[
+            PushRosNamespace(namespace), SetRemap(src='/tf', dst='tf'),
+            SetRemap(src='/tf_static', dst='tf_static'), *nodes,
+        ])]
     return nodes
 
 
 def generate_launch_description():
     motion_share = Path(get_package_share_directory('ropes_motion'))
     sim_share = Path(get_package_share_directory('ropes_simulation'))
+    hardware_share = Path(get_package_share_directory('ropes_hardware'))
     return LaunchDescription([
         DeclareLaunchArgument(
-            'backend', default_value='kinematic', choices=['kinematic', 'gazebo'],
-            description='Ideal kinematics or Gazebo Classic cable dynamics.',
+            'backend', default_value='kinematic', choices=['kinematic', 'gazebo', 'hardware'],
+            description='Ideal kinematics, Gazebo cable dynamics, or USB serial hardware.',
         ),
         DeclareLaunchArgument(
             'control', default_value='trajectory', choices=['trajectory', 'xyz', 'drum'],
@@ -131,6 +160,15 @@ def generate_launch_description():
             'simulation_config_path',
             default_value=str(sim_share / 'config' / 'simulation.yaml'),
             description='Path to the Gazebo physics settings YAML.',
+        ),
+        DeclareLaunchArgument(
+            'hardware_config_path',
+            default_value=str(hardware_share / 'config' / 'hardware.example.yaml'),
+            description='Path to the USB driver settings and drum calibration YAML.',
+        ),
+        DeclareLaunchArgument(
+            'hardware_namespace', default_value='ropes_real',
+            description='ROS namespace to isolate physical commands, feedback and TF.',
         ),
         OpaqueFunction(function=create_nodes),
     ])

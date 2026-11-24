@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from ropes_kinematics.model import CableModel
-from ropes_motion.planner import CartesianPlanner, TrajectoryLimits
+from ropes_motion.planner import ActuatorAngleLimits, CartesianPlanner, TrajectoryLimits
 
 
 @pytest.fixture
@@ -76,9 +76,12 @@ def test_duplicate_waypoints_and_stationary_path(model):
     assert plan.points == (model.home, end)
     assert plan.sample(plan.duration_s / 2.0).segment_index == 1
     assert plan.sample(plan.duration_s).segment_index == 2
+    assert plan.waypoint_schedule()[0].elapsed_s == plan.duration_s
+    assert plan.waypoint_schedule()[0].segment_index == 2
     stationary = planner.plan(model.home, [model.home, model.home])
     assert stationary.duration_s == 0.0
     assert stationary.sample(10.0).position == model.home
+    assert stationary.waypoint_schedule()[0].position == model.home
 
 
 def test_invalid_waypoints_are_reported_before_execution(model):
@@ -91,6 +94,69 @@ def test_invalid_waypoints_are_reported_before_execution(model):
         planner.plan(model.home, [(0.0, 0.0, math.nan)])
     with pytest.raises(ValueError, match="At least one"):
         planner.plan(model.home, [])
+
+
+def test_calibrated_drum_limits_check_start_and_later_segments(model):
+    unbounded = math.inf
+    limits = ActuatorAngleLimits(
+        lower_rad=(-unbounded, -unbounded, -unbounded),
+        upper_rad=(0.5, unbounded, unbounded),
+    )
+    planner = CartesianPlanner(model, actuator_limits=limits)
+
+    out_of_range = (0.0, 0.0, 0.15)
+    with pytest.raises(ValueError, match="Current position.*drum_1_joint"):
+        planner.plan(out_of_range, [out_of_range])
+    with pytest.raises(ValueError, match="Waypoint 2.*drum_1_joint.*calibrated drum range"):
+        planner.plan(model.home, [(0.0, 0.0, 0.16), out_of_range])
+    assert planner.plan(model.home, [(0.0, 0.0, 0.16)]).duration_s > 0.0
+
+
+@pytest.mark.parametrize("joint_index", [1, 2])
+def test_calibrated_angle_extremum_inside_straight_segment(model, joint_index):
+    if joint_index == 1:
+        start = (-0.035, 0.0, 0.17)
+        end = (0.035, 0.0, 0.17)
+        lower, upper = (0.05, math.inf)
+    else:
+        start = (-0.03, 0.03, 0.17)
+        end = (0.03, -0.03, 0.17)
+        lower, upper = (-math.inf, -0.05)
+    for point in (start, end):
+        assert lower < model.inverse(point)[joint_index] < upper
+    assert not lower < model.inverse(model.home)[joint_index] < upper
+
+    lowers = [-math.inf] * 3
+    uppers = [math.inf] * 3
+    lowers[joint_index] = lower
+    uppers[joint_index] = upper
+    planner = CartesianPlanner(model, actuator_limits=ActuatorAngleLimits(lowers, uppers))
+    with pytest.raises(ValueError, match=f"Waypoint 1.*{model.joint_names[joint_index]}"):
+        planner.plan(start, [end])
+
+
+def test_calibrated_bounds_are_inclusive(model):
+    start = (0.0, 0.0, 0.16)
+    end = (0.0, 0.0, 0.15)
+    endpoints = model.inverse(start), model.inverse(end)
+    limits = ActuatorAngleLimits(
+        tuple(map(min, zip(*endpoints))), tuple(map(max, zip(*endpoints)))
+    )
+    planner = CartesianPlanner(model, actuator_limits=limits)
+    assert planner.plan(start, [end]).sample(100.0).position == end
+    assert planner.plan(end, [end]).duration_s == 0.0
+
+
+@pytest.mark.parametrize("lower, upper", [
+    ((-1.0, -1.0), (1.0, 1.0, 1.0)),
+    ((-1.0, -1.0, 2.0), (1.0, 1.0, 1.0)),
+    ((-1.0, -1.0, math.nan), (1.0, 1.0, 1.0)),
+    ((-1.0, -1.0, math.inf), (1.0, 1.0, 1.0)),
+    ((-1.0, -1.0, -1.0), (1.0, 1.0, -math.inf)),
+])
+def test_calibrated_bounds_reject_invalid_arrays(lower, upper):
+    with pytest.raises(ValueError):
+        ActuatorAngleLimits(lower, upper)
 
 
 @pytest.mark.parametrize("value", [False, 0.0, -0.1, math.inf, math.nan])

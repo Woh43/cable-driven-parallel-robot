@@ -47,6 +47,41 @@ def _scale(vector, scale):
     return tuple(value * scale for value in vector)
 
 
+def _angle_bounds(values, name, open_bound):
+    try:
+        values = tuple(values)
+    except TypeError as error:
+        raise ValueError(f"{name} must contain three joint bounds") from error
+    if len(values) != 3:
+        raise ValueError(f"{name} must contain three joint bounds")
+    return tuple(open_bound if value == open_bound else _finite(value, name) for value in values)
+
+
+@dataclass(frozen=True)
+class ActuatorAngleLimits:
+    """Inclusive drum travel limits in the model's joint order."""
+
+    lower_rad: Vector = (-math.inf, -math.inf, -math.inf)
+    upper_rad: Vector = (math.inf, math.inf, math.inf)
+
+    def __post_init__(self):
+        lower = _angle_bounds(self.lower_rad, "actuator_lower_limits_rad", -math.inf)
+        upper = _angle_bounds(self.upper_rad, "actuator_upper_limits_rad", math.inf)
+        if any(lo > hi for lo, hi in zip(lower, upper)):
+            raise ValueError("Each actuator lower angle limit must be at or below its upper limit")
+        object.__setattr__(self, "lower_rad", lower)
+        object.__setattr__(self, "upper_rad", upper)
+
+    def validate(self, joint_names, ranges):
+        for name, bounds, lower, upper in zip(joint_names, ranges, self.lower_rad, self.upper_rad):
+            minimum, maximum = bounds
+            if minimum < lower or maximum > upper:
+                raise ValueError(
+                    f"{name}: path needs [{minimum:.6g}, {maximum:.6g}] rad outside "
+                    f"the calibrated drum range [{lower:.6g}, {upper:.6g}] rad"
+                )
+
+
 @dataclass(frozen=True)
 class TrajectoryLimits:
     max_cartesian_speed_m_s: float = 0.06
@@ -66,6 +101,13 @@ class TrajectorySample:
     position: Vector
     velocity: Vector
     acceleration: Vector
+    segment_index: int
+
+
+@dataclass(frozen=True)
+class ScheduledWaypoint:
+    elapsed_s: float
+    position: Vector
     segment_index: int
 
 
@@ -109,6 +151,15 @@ class CartesianPlan:
     def duration_s(self):
         return self._end_times_s[-1] if self._end_times_s else 0.0
 
+    def waypoint_schedule(self):
+        """Return each distinct arrival time and its waypoint in execution order."""
+        arrivals = tuple(
+            ScheduledWaypoint(end_s, segment.end, segment.index)
+            for end_s, segment in zip(self._end_times_s, self._segments)
+        )
+        terminal = ScheduledWaypoint(self.duration_s, self.points[-1], self._terminal_index)
+        return (*arrivals[:-1], terminal)
+
     def sample(self, elapsed_s):
         """Return position and derivatives in SI units, clamped to the plan endpoints."""
         elapsed_s = _finite(elapsed_s, "elapsed time")
@@ -122,14 +173,19 @@ class CartesianPlan:
 class CartesianPlanner:
     """Time straight Cartesian segments with zero velocity and acceleration at waypoints."""
 
-    def __init__(self, model, limits=None):
+    def __init__(self, model, limits=None, actuator_limits=None):
         self.model = model
         self.limits = limits if limits is not None else TrajectoryLimits()
+        self.actuator_limits = (
+            actuator_limits if actuator_limits is not None else ActuatorAngleLimits()
+        )
 
     def plan(self, start, waypoints):
         start = _position(start, "Current position")
         try:
-            self.model.inverse(start)
+            angles = self.model.inverse(start)
+            point_ranges = ((angle, angle) for angle in angles)
+            self.actuator_limits.validate(self.model.joint_names, point_ranges)
         except ValueError as error:
             raise ValueError(f"Current position cannot start a path: {error}") from error
 
@@ -165,14 +221,22 @@ class CartesianPlanner:
         if distance == 0.0 or not math.isfinite(distance):
             raise ValueError("Waypoint displacement is outside numerical range")
         direction = tuple(component / distance for component in delta)
+        endpoints = (start, end)
         # Each free length is convex on a line. Its derivative along the line
         # is nondecreasing, so the maximum absolute drum derivative is at an end.
         drum_derivative = max(
             abs(_dot(row, delta))
-            for point in (start, end)
+            for point in endpoints
             for row in self.model.jacobian(point)
         )
-        acceleration = self._taut_acceleration_limit(start, end, direction, distance)
+        endpoint_lengths = tuple(
+            tuple(math.dist(point, anchor) for anchor in self.model.anchors) for point in endpoints
+        )
+        minimum_lengths = self._minimum_lengths(start, direction, distance, endpoint_lengths)
+        self._check_angle_limits(endpoint_lengths, minimum_lengths)
+        acceleration = self._taut_acceleration_limit(
+            endpoints, direction, endpoint_lengths, minimum_lengths
+        )
         duration_s = max(
             self.limits.min_segment_duration_s,
             _QUINTIC_PEAK_SPEED * distance / self.limits.max_cartesian_speed_m_s,
@@ -183,18 +247,36 @@ class CartesianPlanner:
             raise ValueError("Segment duration is nonfinite")
         return _Segment(start, end, delta, duration_s, index)
 
-    def _taut_acceleration_limit(self, start, end, direction, distance):
-        endpoints = (start, end)
-        anchors = self.model.anchors
-        endpoint_lengths = tuple(
-            tuple(math.dist(point, anchor) for anchor in anchors) for point in endpoints
-        )
-        minimum_lengths = []
-        for anchor in anchors:
-            along = max(0.0, min(distance, _dot(_subtract(anchor, start), direction)))
-            closest = tuple(position + along * axis for position, axis in zip(start, direction))
-            minimum_lengths.append(math.dist(closest, anchor))
+    def _minimum_lengths(self, start, direction, distance, endpoint_lengths):
+        minimums = []
+        for anchor, first, last in zip(self.model.anchors, *endpoint_lengths):
+            along = _dot(_subtract(anchor, start), direction)
+            if along <= 0.0:
+                minimum = first
+            elif along >= distance:
+                minimum = last
+            else:
+                closest = tuple(p + along * axis for p, axis in zip(start, direction))
+                minimum = math.dist(closest, anchor)
+            minimums.append(minimum)
+        return tuple(minimums)
 
+    def _check_angle_limits(self, endpoint_lengths, minimum_lengths):
+        ranges = []
+        for first, last, minimum, neutral, payout in zip(
+            *endpoint_lengths, minimum_lengths, self.model.neutral_lengths,
+            self.model.payout_coefficients,
+        ):
+            # The projection gives minimum free length, and the maximum is
+            # at an endpoint. Negative payout reverses the angle extrema.
+            closest_angle = (minimum - neutral) / payout
+            farthest_angle = (max(first, last) - neutral) / payout
+            ranges.append((
+                min(closest_angle, farthest_angle), max(closest_angle, farthest_angle)
+            ))
+        self.actuator_limits.validate(self.model.joint_names, ranges)
+
+    def _taut_acceleration_limit(self, endpoints, direction, endpoint_lengths, minimum_lengths):
         def maintains_tension(acceleration, gravity):
             # For a fixed force, tension divided by free length is affine along
             # the segment divided by its positive distance to the guide plane.

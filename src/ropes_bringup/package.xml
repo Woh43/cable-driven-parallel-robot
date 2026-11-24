@@ -13,6 +13,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>ropes_description</exec_depend>
+  <exec_depend>ropes_hardware</exec_depend>
   <exec_depend>ropes_kinematics</exec_depend>
   <exec_depend>ropes_motion</exec_depend>
   <exec_depend>ropes_simulation</exec_depend>
