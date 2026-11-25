@@ -2,6 +2,18 @@
 
 `ropes_ws` 是三绳驱动并联机器人的 ROS 2 Humble 工作空间。三根绳汇到一个球形挂点，控制末端在 `base_link` 中的 XYZ 位置。工作空间提供正逆运动学服务、笛卡尔路径 Action、RViz 展示和 Gazebo 11 动力学仿真。原有 CAD 网格、滑轮路径、卷筒坐标和零位标定集中在描述包。
 
+## 模型与轨迹演示
+
+### RViz 末端轨迹
+
+![RViz 中红色末端沿绿色规划轨迹运动](docs/media/rviz-trajectory.gif)
+
+运动学仿真中，红球沿绿色规划路径依次到达五个航点，最后回到零位。
+
+### URDF 零位模型
+
+![URDF 零位模型，显示机架、三个卷筒和三根绳索](docs/media/urdf.png)
+
 ## GitHub 参考
 
 - `Tachia/cdpr_ros2_ws` 将机器人描述、控制和 Gazebo 插件分包，其工作空间使用 ROS 2 Jazzy 与 Gazebo Harmonic。本项目参考其职责划分，按本机的 Humble 与 Gazebo 11 实现。[cdpr_ros2_ws](https://github.com/Tachia/cdpr_ros2_ws)
