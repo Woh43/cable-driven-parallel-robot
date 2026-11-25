@@ -37,6 +37,7 @@ _BASE_FRAME = "base_link"
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 _SOURCE_CLOCK_TOLERANCE_NS = 50_000_000
 _FEEDBACK_BUFFER_SIZE = 8
+_ZERO_VELOCITY = (0.0, 0.0, 0.0)
 
 
 def _xyz(point):
@@ -323,7 +324,7 @@ class TrajectoryServer(Node):
             if self.require_hardware_ready:
                 message = "Trajectory canceled"
             elif execution.last_angles is not None:
-                self._command(execution.last_angles, now.to_msg())
+                self._command(execution.last_angles, now.to_msg(), _ZERO_VELOCITY)
                 message = "Canceled. Holding the last commanded drum angles"
             self._finish(execution, "canceled", message)
             return
@@ -363,6 +364,7 @@ class TrajectoryServer(Node):
             execution.hardware_waypoints[execution.waypoint_cursor]
             if execution.hardware_waypoints else None
         )
+        cartesian_velocity = _ZERO_VELOCITY
         if waypoint is not None and elapsed_s >= waypoint.elapsed_s:
             elapsed_s = waypoint.elapsed_s
             position = waypoint.position
@@ -371,17 +373,26 @@ class TrajectoryServer(Node):
         else:
             sample = plan.sample(elapsed_s)
             position = sample.position
+            cartesian_velocity = sample.velocity
             segment_index = sample.segment_index
             settling = None
             if elapsed_s >= plan.duration_s:
                 settling = ScheduledWaypoint(plan.duration_s, position, segment_index)
         try:
             angles = self.model.inverse(position)
+            velocities = None
+            if not self.require_hardware_ready:
+                velocities = tuple(
+                    math.fsum(
+                        derivative * speed for derivative, speed in zip(row, cartesian_velocity)
+                    )
+                    for row in self.model.jacobian(position)
+                )
         except ValueError as error:
             self._finish(execution, "abort", f"Planned sample failed inverse kinematics: {error}")
             return
         stamp = now.to_msg()
-        self._command(angles, stamp)
+        self._command(angles, stamp, velocities)
         execution.last_angles = angles
 
         progress = 1.0 if elapsed_s >= plan.duration_s else elapsed_s / plan.duration_s
@@ -435,11 +446,13 @@ class TrajectoryServer(Node):
                 )
             self._finish(execution, "abort", message)
 
-    def _command(self, angles, stamp):
+    def _command(self, angles, stamp, velocities=None):
         message = JointState()
         message.header.stamp = stamp
         message.name = list(self.model.joint_names)
         message.position = list(angles)
+        if velocities is not None:
+            message.velocity = list(velocities)
         self._commands.publish(message)
 
     def _publish_path(self, plan, stamp):

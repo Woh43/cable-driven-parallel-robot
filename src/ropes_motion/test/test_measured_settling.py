@@ -1,10 +1,11 @@
 from collections import deque
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 from geometry_msgs.msg import Point, PointStamped
 import pytest
+from rclpy.time import Time
 
 from ropes_kinematics.model import CableModel
 from ropes_motion.planner import CartesianPlanner
@@ -107,3 +108,48 @@ def test_hardware_feedback_uses_latest_fresh_common_timestamp(model):
     server._drum_samples.append(newer.drums)
     assert TrajectoryServer._fresh_feedback(server, _NS + 20_000_000) == newer
     assert TrajectoryServer._fresh_feedback(server, _NS + 120_000_000) is None
+
+
+@pytest.mark.parametrize("hardware", [False, True])
+def test_drum_command_velocity_matches_the_position_trajectory(model, hardware):
+    plan = CartesianPlanner(model).plan(model.home, [(0.0, 0.0, 0.15)])
+    handle = SimpleNamespace(is_cancel_requested=False, publish_feedback=Mock())
+    execution = _Execution(handle, None, plan=plan, started_ns=_NS)
+    if hardware:
+        execution.hardware_waypoints = plan.waypoint_schedule()
+    clock = SimpleNamespace(now=Mock(return_value=Time(nanoseconds=1_200_000_000)))
+    server = SimpleNamespace(
+        model=model, require_hardware_ready=hardware, pose_timeout_s=0.5, command_period_s=0.02,
+        _execution=execution, get_clock=Mock(return_value=clock), _hardware_problem=Mock(),
+        _fresh_feedback=Mock(return_value=_measure(model, model.home, _NS)), _commands=Mock(),
+        _settle=Mock(), _finish=Mock(),
+    )
+    server._hardware_problem.return_value = None
+    server._command = MethodType(TrajectoryServer._command, server)
+    TrajectoryServer._advance(server)
+    message, = server._commands.publish.call_args.args
+    assert list(message.name) == list(model.joint_names)
+    assert list(message.position) == pytest.approx(model.inverse(plan.sample(0.2).position))
+
+    if hardware:
+        assert list(message.velocity) == []
+        return
+
+    step = 1e-5
+    before = model.inverse(plan.sample(0.2 - step).position)
+    after = model.inverse(plan.sample(0.2 + step).position)
+    finite_difference = tuple((a - b) / (2.0 * step) for a, b in zip(after, before))
+    assert list(message.velocity) == pytest.approx(finite_difference)
+    assert message.velocity[0] > 0.0 and message.velocity[2] < 0.0
+
+    end_ns = _NS + round(plan.duration_s * _NS) + 1
+    execution.last_tick_ns = end_ns - 20_000_000
+    clock.now.return_value = Time(nanoseconds=end_ns)
+    TrajectoryServer._advance(server)
+    message, = server._commands.publish.call_args.args
+    assert list(message.velocity) == [0.0, 0.0, 0.0]
+
+    handle.is_cancel_requested = True
+    TrajectoryServer._advance(server)
+    message, = server._commands.publish.call_args.args
+    assert list(message.velocity) == [0.0, 0.0, 0.0]

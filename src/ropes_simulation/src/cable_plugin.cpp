@@ -33,6 +33,8 @@ using sensor_msgs::msg::JointState;
 
 constexpr std::size_t kCableCount = 3;
 constexpr double kLengthEpsilon = 1e-9;
+constexpr double kPredictionHorizonS = 0.035;
+constexpr double kDrumResponseTimeS = 0.020;
 constexpr char kBaseFrame[] = "base_link";
 constexpr char kFrameModel[] = "ropes_frame";
 constexpr std::array<const char *, 3> kCartesianJoints = {
@@ -46,6 +48,8 @@ struct Cable
   double free_length_limit = 0.0;
   double payout_coefficient = 0.0;
   double preload_m = 0.0;
+  double min_angle = 0.0;
+  double max_angle = 0.0;
   std::string drum_model_name;
   Vector3d drum_axis;
   ModelPtr drum;
@@ -54,6 +58,14 @@ struct Cable
   gazebo::msgs::Visual span_visual;
   double angle = 0.0;
   double tension = 0.0;
+};
+
+struct DrumCommand
+{
+  std::array<double, kCableCount> angles{};
+  std::array<double, kCableCount> rates{};
+  double stamp = 0.0;
+  bool has_rates = false;
 };
 }  // namespace
 
@@ -74,6 +86,12 @@ public:
       cable.free_length_limit = row->Get<double>("free_length_limit");
       cable.payout_coefficient = row->Get<double>("payout_coefficient");
       cable.preload_m = row->Get<double>("preload_m");
+      const double minimum_payout_angle =
+        (cable.preload_m + kLengthEpsilon - cable.neutral_length) / cable.payout_coefficient;
+      const double maximum_payout_angle =
+        (cable.free_length_limit - cable.neutral_length) / cable.payout_coefficient;
+      cable.min_angle = std::min(minimum_payout_angle, maximum_payout_angle);
+      cable.max_angle = std::max(minimum_payout_angle, maximum_payout_angle);
       cable.drum_model_name = row->Get<std::string>("drum_model");
       cable.drum_axis = row->Get<Vector3d>("drum_axis").Normalized();
       cable.span_visual_name = row->Get<std::string>("span_visual");
@@ -122,7 +140,7 @@ public:
   {
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
-      targets_.fill(0.0);
+      command_ = DrumCommand{};
     }
     for (auto & cable : cables_) {
       cable.angle = 0.0;
@@ -136,12 +154,19 @@ private:
   void ReceiveCommand(const JointState & message)
   {
     std::string error;
-    std::array<double, kCableCount> targets{};
+    DrumCommand command;
+    command.has_rates = !message.velocity.empty();
+    const auto & stamp = message.header.stamp;
+    if (stamp.sec >= 0 && stamp.nanosec < 1000000000u) {
+      command.stamp = static_cast<double>(stamp.sec) + 1e-9 * stamp.nanosec;
+    }
     if (message.name.size() != message.position.size() ||
       std::unordered_set<std::string>(message.name.begin(), message.name.end()).size() !=
       message.name.size())
     {
       error = "Joint names and positions must match without duplicates";
+    } else if (command.has_rates && message.velocity.size() != message.name.size()) {
+      error = "Joint velocities must be empty or match the joint names";
     } else {
       for (std::size_t index = 0; index < cables_.size(); ++index) {
         const auto & cable = cables_[index];
@@ -150,7 +175,8 @@ private:
           error = "Missing joint " + cable.name;
           break;
         }
-        const double angle = message.position[it - message.name.begin()];
+        const auto offset = it - message.name.begin();
+        const double angle = message.position[offset];
         const double length = cable.neutral_length + cable.payout_coefficient * angle;
         if (!std::isfinite(length) || length <= cable.preload_m + kLengthEpsilon ||
           length > cable.free_length_limit + kLengthEpsilon)
@@ -158,7 +184,15 @@ private:
           error = "Free length beyond drum travel for joint " + cable.name;
           break;
         }
-        targets[index] = angle;
+        command.angles[index] = angle;
+        if (command.has_rates) {
+          const double rate = message.velocity[offset];
+          if (!std::isfinite(rate)) {
+            error = "Nonfinite drum velocity for joint " + cable.name;
+            break;
+          }
+          command.rates[index] = std::clamp(rate, -max_drum_speed_, max_drum_speed_);
+        }
       }
     }
     if (!error.empty()) {
@@ -166,7 +200,7 @@ private:
       return;
     }
     std::lock_guard<std::mutex> lock(command_mutex_);
-    targets_ = targets;
+    command_ = command;
   }
 
   void Update(const gazebo::common::UpdateInfo & info)
@@ -176,17 +210,31 @@ private:
     }
     const double dt = (info.simTime - last_update_).Double();
     last_update_ = info.simTime;
-    std::array<double, kCableCount> targets;
+    DrumCommand command;
     {
       std::lock_guard<std::mutex> lock(command_mutex_);
-      targets = targets_;
+      command = command_;
     }
+    const double now = use_sim_time_ ? info.simTime.Double() : wall_clock_.now().seconds();
+    const double age = command.stamp > 0.0 ? now - command.stamp : -1.0;
+    const double forecast = std::clamp(age, 0.0, kPredictionHorizonS);
+    const bool fresh = age >= 0.0 && age < kPredictionHorizonS;
+    const double max_step = max_drum_speed_ * dt;
     const Vector3d position = payload_->WorldPose().Pos();
     const Vector3d velocity = payload_->WorldLinearVel();
     for (std::size_t index = 0; index < cables_.size(); ++index) {
       auto & cable = cables_[index];
-      const double step = std::clamp(
-        targets[index] - cable.angle, -max_drum_speed_ * dt, max_drum_speed_ * dt);
+      const double target = std::clamp(
+        command.angles[index] + command.rates[index] * forecast, cable.min_angle, cable.max_angle);
+      double correction = target - cable.angle;
+      if (command.has_rates) {
+        // Smooth sampled trajectory targets while keeping their analytic payout rate.
+        correction *= std::min(dt / kDrumResponseTimeS, 1.0);
+        correction += fresh ? command.rates[index] * dt : 0.0;
+      }
+      const double next_angle = std::clamp(
+        cable.angle + std::clamp(correction, -max_step, max_step), cable.min_angle, cable.max_angle);
+      const double step = next_angle - cable.angle;
       cable.angle += step;
       if (!cable.drum) {
         cable.drum = world_->ModelByName(cable.drum_model_name);
@@ -301,7 +349,7 @@ private:
   gazebo::common::Time publish_period_;
   std::array<Cable, kCableCount> cables_;
   std::mutex command_mutex_;
-  std::array<double, kCableCount> targets_{};
+  DrumCommand command_;
   rclcpp::Publisher<PointStamped>::SharedPtr poses_;
   rclcpp::Publisher<JointState>::SharedPtr states_;
   rclcpp::Publisher<CableTensions>::SharedPtr tensions_;
