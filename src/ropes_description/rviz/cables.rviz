@@ -40,6 +40,16 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: cable_paths
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Static workspace
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: static_workspace
+      Value: true
     - Class: rviz_default_plugins/Path
       Color: 38; 115; 69
       Enabled: true
@@ -70,12 +80,12 @@ Visualization Manager:
       Focal Point:
         X: 0
         Y: -0.02
-        Z: 0.18
+        Z: 0.195
       Name: Current View
       Near Clip Distance: 0.01
-      Pitch: 0.52
+      Pitch: 0.24
       Target Frame: base_link
-      Yaw: 5.43
+      Yaw: 4.57
     Saved: ~
 Window Geometry:
   Height: 820

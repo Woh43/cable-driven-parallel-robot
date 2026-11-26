@@ -10,6 +10,12 @@
 
 运动学仿真中，红球沿绿色规划路径依次到达五个航点，最后回到零位。
 
+### RViz 末端可达区域
+
+![RViz 中的蓝色半透明静态工作空间、三根绳索和红色末端](docs/media/rviz-workspace.png)
+
+RViz 默认开启 `Static workspace` 图层。蓝色半透明区域表示 `base_link` 下末端球心的静态工作空间。默认区域为三个出线点的 XY 投影围成的三角柱，Z 高度为 `90–240 mm`。三角柱侧面是绳索失去张力的极限，规划目标应位于三角形内部。自定义标定中若绳长或导向平面进一步限制范围，图层显示静态工作空间内的保守三角柱。实机可用范围还取决于卷筒标定行程和机械净空。
+
 ### URDF 零位模型
 
 ![URDF 零位模型，显示机架、三个卷筒和三根绳索](docs/media/urdf.png)
@@ -125,6 +131,7 @@ ros2 topic pub --once /end_effector_target geometry_msgs/msg/PointStamped \
 | `/joint_states` | `sensor_msgs/msg/JointState` | 卷筒角度和用于 TF 的三轴末端位移 |
 | `/planned_path` | `nav_msgs/msg/Path` | 最近一次规划的笛卡尔折线 |
 | `/cable_paths` | `visualization_msgs/msg/MarkerArray` | 三条绳路的 RViz 标记 |
+| `/static_workspace` | `visualization_msgs/msg/MarkerArray` | 末端静态工作空间的半透明区域和边线 |
 | `/cable_tensions` | `ropes_interfaces/msg/CableTensions` | Gazebo 中的三个具名绳张力，单位 N |
 
 ## 标定与仿真模型

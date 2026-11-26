@@ -1,4 +1,4 @@
-"""Draw the surveyed cable leads and measured moving segments in RViz."""
+"""Draw the cable paths and static workspace in RViz."""
 
 import math
 
@@ -6,11 +6,37 @@ from geometry_msgs.msg import Point, PointStamped
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from ropes_kinematics.model import CableModel
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .description import BASE_FRAME, DEFAULT_GEOMETRY_PATH
+
+
+def _workspace_markers(footprint, heights):
+    low, high = heights
+    floor = [Point(x=x, y=y, z=low) for x, y in footprint]
+    ceiling = [Point(x=x, y=y, z=high) for x, y in footprint]
+    surface = Marker(id=0, type=Marker.TRIANGLE_LIST)
+    outline = Marker(id=1, type=Marker.LINE_LIST)
+    for marker in (surface, outline):
+        marker.header.frame_id = BASE_FRAME
+        marker.ns = 'static_workspace'
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+
+    surface.scale.x = surface.scale.y = surface.scale.z = 1.0
+    surface.color.r, surface.color.g, surface.color.b, surface.color.a = 0.06, 0.52, 0.76, 0.23
+    surface.points = [*reversed(floor), *ceiling]
+    outline.scale.x = 0.002
+    outline.color.r, outline.color.g, outline.color.b, outline.color.a = 0.04, 0.33, 0.60, 0.95
+    for index in range(len(floor)):
+        following = (index + 1) % len(floor)
+        a, b = floor[index], floor[following]
+        c, d = ceiling[following], ceiling[index]
+        surface.points.extend((a, b, c, a, c, d))
+        outline.points.extend((a, b, d, c, a, d))
+    return MarkerArray(markers=[surface, outline])
 
 
 class CableVisualizer(Node):
@@ -21,6 +47,18 @@ class CableVisualizer(Node):
         if not math.isfinite(width) or width <= 0.0:
             raise ValueError('cable_display_width_m must be finite and positive')
         model = CableModel.from_file(config_path)
+        self.workspace_publisher = self.create_publisher(
+            MarkerArray, 'static_workspace',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        bounds = model.static_workspace_bounds()
+        if bounds is None:
+            self.get_logger().warning('The calibration leaves no static workspace prism to draw')
+            markers = MarkerArray(markers=[Marker(action=Marker.DELETEALL)])
+        else:
+            markers = _workspace_markers(*bounds)
+        self.workspace_publisher.publish(markers)
+
         self.paths = MarkerArray()
         for index, cable in enumerate(model.cables, start=1):
             marker = Marker()

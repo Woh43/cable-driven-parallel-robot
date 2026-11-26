@@ -212,6 +212,49 @@ class CableModel:
         self._tensions(position, lengths, (0.0, 0.0, DEFAULT_GRAVITY_M_S2))
         return lengths
 
+    def static_workspace_bounds(self):
+        """Return the CCW XY vertices and height limits of a display prism in meters.
+
+        Gravity balance requires the effector's XY position inside the guide
+        triangle. Its sides represent the limiting case of a slack cable.
+        If the guide plane or length limits clip this prism, shrink it toward
+        home to display a conservative subset of the workspace.
+        """
+        first, second, third = self.anchors
+        vertices = tuple(anchor[:2] for anchor in self.anchors)
+        if _cross(_subtract(second, first), _subtract(third, first))[2] < 0.0:
+            vertices = vertices[::-1]
+
+        def fits(footprint, heights):
+            # Length bounds and lower guide-plane clearance are convex, so
+            # checking the six corners also bounds every point between them.
+            try:
+                for x, y in footprint:
+                    for z in heights:
+                        self._point_lengths((x, y, z))
+            except ValueError:
+                return False
+            return True
+
+        if fits(vertices, self.height_range):
+            return vertices, self.height_range
+
+        hx, hy, hz = self.home
+        lower_scale, upper_scale = 0.0, 1.0
+        bounds = None
+        for _ in range(40):
+            scale = (lower_scale + upper_scale) / 2.0
+            footprint = tuple(
+                (hx + scale * (x - hx), hy + scale * (y - hy)) for x, y in vertices
+            )
+            heights = tuple(hz + scale * (z - hz) for z in self.height_range)
+            if fits(footprint, heights):
+                bounds = footprint, heights
+                lower_scale = scale
+            else:
+                upper_scale = scale
+        return bounds
+
     def inverse(self, position):
         """Map a feasible base-frame XYZ target in meters to drum angles in radians."""
         angles = tuple(
